@@ -357,7 +357,7 @@ describe('viewer app integration', () => {
 
     scatterChart.dispatchEvent(new dom.window.MouseEvent('click', { clientX: 620, clientY: 20, bubbles: true }));
     expect(dom.window.document.getElementById('detailsPanel').textContent).toContain('OrdersApp');
-    expect(dom.window.__scrollIntoViewCalls).toBe(1);
+    expect(dom.window.__scrollIntoViewCalls).toBe(2); // selected row + details panel on mobile
 
     scatterChart.dispatchEvent(new dom.window.MouseEvent('mouseleave', { bubbles: true }));
     expect(scatterTooltip.classList.contains('visible')).toBe(false);
@@ -929,5 +929,271 @@ describe('viewer app integration', () => {
     expect(canvasInModal.height).toBeGreaterThan(0);
     expect(rect.width).toBeGreaterThan(0);
     expect(rect.height).toBeGreaterThan(0);
+  });
+
+  it('skips chart redraw in modal when state has no analysis', () => {
+    // Open a chart panel modal BEFORE any data is processed so state.analysis is null.
+    // This exercises the false branches of the durationChartInModal/scatterChartInModal guards.
+    const expandBtn = dom.window.document.querySelector('.expand-btn');
+
+    // No app.processData() call — state.analysis is null
+    // The expand button only exists after data is rendered, so we need to
+    // manually inject a panel matching the modal path to trigger the guard.
+    // Instead, open the modal with processData then close, confirming no error thrown
+    // when state has no analysis by resetting the state indirectly.
+    // The cleanest approach: call openPanelModal indirectly via a panel's expand button
+    // but on a panel that clones a canvas — the guard must still handle analysis=null.
+    app.processData([makeRawEvent()]);
+
+    // Capture the state reference and set analysis to null to simulate no-analysis branch
+    const state = app.getState();
+    const originalAnalysis = state.analysis;
+    state.analysis = null;
+
+    const chartPanel = Array.from(dom.window.document.querySelectorAll('.expand-btn')).find(btn => {
+      const panel = btn.closest('.panel');
+      return panel && panel.querySelector('canvas');
+    });
+
+    expect(chartPanel).not.toBeNull();
+    // Should not throw even though state.analysis is null
+    expect(() => {
+      chartPanel.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+    }).not.toThrow();
+
+    const modal = dom.window.document.querySelector('.modal-overlay');
+    expect(modal).not.toBeNull();
+
+    // Restore
+    state.analysis = originalAnalysis;
+  });
+
+  it('focus trap ignores non-Tab key events inside modal', () => {
+    app.processData([makeRawEvent()]);
+
+    const expandBtn = dom.window.document.querySelector('.expand-btn');
+    expandBtn.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+
+    const modal = dom.window.document.querySelector('.modal-overlay');
+    expect(modal).not.toBeNull();
+
+    // Dispatching a non-Tab key inside modal should not throw and should be ignored
+    expect(() => {
+      const keyEvent = new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+      modal.dispatchEvent(keyEvent);
+    }).not.toThrow();
+  });
+
+  it('scatter click scrolls the selected table row into view', () => {
+    // Wide layout — currently only mobile scrolls; after the fix it should always scroll the row
+    dom = createDom({ width: 1440 });
+    app = initializeViewer({
+      document: dom.window.document,
+      windowObject: dom.window,
+      FileReaderCtor: MockFileReader
+    });
+
+    app.processData([
+      makeRawEvent({ values: { statement: 'SELECT 1', duration: 1200, cpu_time: 140, logical_reads: 1800 } })
+    ]);
+
+    const scrollIntoViewCalls = [];
+    dom.window.HTMLElement.prototype.scrollIntoView = function (opts) {
+      scrollIntoViewCalls.push({ el: this, opts });
+    };
+
+    const scatterChart = dom.window.document.getElementById('scatterChart');
+    scatterChart.dispatchEvent(new dom.window.MouseEvent('click', { clientX: 620, clientY: 20, bubbles: true }));
+
+    // Should have scrolled something into view (the selected table row)
+    const rowScroll = scrollIntoViewCalls.find(call => call.el.matches && call.el.matches('tr'));
+    expect(rowScroll).not.toBeUndefined();
+    expect(rowScroll.opts).toMatchObject({ block: 'nearest' });
+  });
+
+  it('modal risk map shows tooltip on hover', () => {
+    dom = createDom({ width: 1440 });
+    app = initializeViewer({
+      document: dom.window.document,
+      windowObject: dom.window,
+      FileReaderCtor: MockFileReader
+    });
+
+    app.processData([
+      makeRawEvent({ values: { statement: 'UPDATE dbo.Orders SET Status = 1', duration: 1200, cpu_time: 140, logical_reads: 1800 } })
+    ]);
+
+    const riskMapBtn = Array.from(dom.window.document.querySelectorAll('.expand-btn')).find(btn => {
+      const panel = btn.closest('.panel');
+      return panel && panel.textContent.includes('Risk Map');
+    });
+    expect(riskMapBtn).not.toBeNull();
+
+    riskMapBtn.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+
+    const modal = dom.window.document.querySelector('.modal-overlay');
+    expect(modal).not.toBeNull();
+
+    const modalCanvas = modal.querySelector('canvas');
+    const modalTooltip = modal.querySelector('.chart-tooltip');
+    expect(modalCanvas).not.toBeNull();
+    expect(modalTooltip).not.toBeNull();
+
+    // Hover over a scatter point in the modal canvas
+    modalCanvas.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 620, clientY: 20, bubbles: true }));
+
+    expect(modalTooltip.classList.contains('visible')).toBe(true);
+    expect(modalTooltip.getAttribute('aria-hidden')).toBe('false');
+
+    // Moving away hides the tooltip
+    modalCanvas.dispatchEvent(new dom.window.MouseEvent('mouseleave', { bubbles: true }));
+    expect(modalTooltip.classList.contains('visible')).toBe(false);
+  });
+
+  it('modal risk map click closes modal, selects row, and shows query details', () => {
+    vi.useFakeTimers();
+    dom = createDom({ width: 1440 });
+    app = initializeViewer({
+      document: dom.window.document,
+      windowObject: dom.window,
+      FileReaderCtor: MockFileReader
+    });
+
+    app.processData([
+      makeRawEvent({ values: { statement: 'DELETE FROM dbo.Logs', client_app_name: 'CleanupApp', duration: 900, cpu_time: 80, logical_reads: 500 } })
+    ]);
+
+    const riskMapBtn = Array.from(dom.window.document.querySelectorAll('.expand-btn')).find(btn => {
+      const panel = btn.closest('.panel');
+      return panel && panel.textContent.includes('Risk Map');
+    });
+    riskMapBtn.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+
+    let modal = dom.window.document.querySelector('.modal-overlay');
+    expect(modal).not.toBeNull();
+
+    const modalCanvas = modal.querySelector('canvas');
+    modalCanvas.dispatchEvent(new dom.window.MouseEvent('click', { clientX: 620, clientY: 20, bubbles: true }));
+
+    // Modal should begin closing
+    vi.advanceTimersByTime(250);
+    modal = dom.window.document.querySelector('.modal-overlay');
+    expect(modal).toBeNull();
+
+    // Details panel should show the clicked event
+    expect(dom.window.document.getElementById('detailsPanel').textContent).toContain('CleanupApp');
+
+    vi.useRealTimers();
+  });
+
+  it('modal scatter event handlers safely handle missing tooltip element', () => {
+    vi.useFakeTimers();
+    dom = createDom({ width: 1440 });
+    app = initializeViewer({
+      document: dom.window.document,
+      windowObject: dom.window,
+      FileReaderCtor: MockFileReader
+    });
+
+    app.processData([
+      makeRawEvent({ values: { statement: 'SELECT COUNT(*)', client_app_name: 'TestApp', duration: 500, cpu_time: 100, logical_reads: 200, writes: 0, row_count: 1 } })
+    ]);
+
+    const riskMapBtn = Array.from(dom.window.document.querySelectorAll('.expand-btn')).find(btn => {
+      const panel = btn.closest('.panel');
+      return panel && panel.textContent.includes('Risk Map');
+    });
+    
+    riskMapBtn.click();
+
+    const modal = dom.window.document.querySelector('.modal-overlay');
+    expect(modal).not.toBeNull();
+
+    // Remove the tooltip to test handlers work without it
+    const tooltip = modal.querySelector('.chart-tooltip');
+    if (tooltip) tooltip.remove();
+
+    const modalCanvas = modal.querySelector('canvas');
+
+    // Test mousemove without tooltip - should not throw
+    expect(() => {
+      modalCanvas.dispatchEvent(new dom.window.MouseEvent('mousemove', { clientX: 100, clientY: 50, bubbles: true }));
+    }).not.toThrow();
+
+    // Test mouseleave without tooltip - should not throw
+    expect(() => {
+      modalCanvas.dispatchEvent(new dom.window.MouseEvent('mouseleave', { bubbles: true }));
+    }).not.toThrow();
+
+    vi.useRealTimers();
+  });
+
+  it('focus trap returns early when modal has no focusable elements', () => {
+    dom = createDom({ width: 1440 });
+    app = initializeViewer({
+      document: dom.window.document,
+      windowObject: dom.window,
+      FileReaderCtor: MockFileReader
+    });
+
+    app.processData([
+      makeRawEvent({ values: { statement: 'SELECT *', client_app_name: 'App', duration: 100, cpu_time: 10, logical_reads: 5, writes: 0, row_count: 1 } })
+    ]);
+
+    const riskMapBtn = Array.from(dom.window.document.querySelectorAll('.expand-btn')).find(btn => {
+      const panel = btn.closest('.panel');
+      return panel && panel.textContent.includes('Risk Map');
+    });
+
+    riskMapBtn.click();
+
+    const modal = dom.window.document.querySelector('.modal-overlay');
+
+    // Remove all focusable elements from modal
+    const focusable = modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    focusable.forEach(el => el.remove());
+
+    // Test that Tab key does not throw even though there are no focusable elements
+    expect(() => {
+      const keyEvent = new dom.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true });
+      modal.dispatchEvent(keyEvent);
+    }).not.toThrow();
+  });
+
+  it('close modal handles missing _closeCleanup gracefully', () => {
+    vi.useFakeTimers();
+    dom = createDom({ width: 1440 });
+    app = initializeViewer({
+      document: dom.window.document,
+      windowObject: dom.window,
+      FileReaderCtor: MockFileReader
+    });
+
+    app.processData([
+      makeRawEvent({ values: { statement: 'SELECT *', client_app_name: 'App', duration: 100, cpu_time: 10, logical_reads: 5, writes: 0, row_count: 1 } })
+    ]);
+
+    const riskMapBtn = Array.from(dom.window.document.querySelectorAll('.expand-btn')).find(btn => {
+      const panel = btn.closest('.panel');
+      return panel && panel.textContent.includes('Risk Map');
+    });
+
+    riskMapBtn.click();
+
+    const modal = dom.window.document.querySelector('.modal-overlay');
+
+    // Explicitly remove the _closeCleanup property
+    delete modal._closeCleanup;
+
+    // Close button should work even though _closeCleanup doesn't exist
+    const closeBtn = modal.querySelector('.modal-close');
+    expect(() => {
+      closeBtn.click();
+    }).not.toThrow();
+
+    vi.advanceTimersByTime(250);
+    expect(dom.window.document.querySelector('.modal-overlay')).toBeNull();
+
+    vi.useRealTimers();
   });
 });

@@ -2,6 +2,8 @@
 
 A lightweight browser-based viewer for SQL Server Profiler JSON exports.
 
+Demo: [Try the deployed version in your browser](https://sql-profile-performance-viewer.netlify.app/).
+
 ## Prerequisites
 
 - Node.js 18+

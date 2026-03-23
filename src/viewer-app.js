@@ -514,12 +514,20 @@ function bindScatterEvents(elements, state, windowObject) {
     state.selectedId = nearest.event.id;
     renderTable(elements, state, windowObject);
     renderDetails(elements, state.analysis, state.selectedId);
-    if (windowObject.innerWidth <= 1180) {
-      elements.detailsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    scrollToSelectedRow(elements, windowObject);
   });
 
   state.scatterEventsBound = true;
+}
+
+function scrollToSelectedRow(elements, windowObject) {
+  const selectedRow = elements.resultsBody.querySelector('tr[data-id].selected');
+  if (selectedRow) {
+    selectedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  if (windowObject.innerWidth <= 1180) {
+    elements.detailsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 function findNearestScatterPoint(pointerEvent, scatterChart, scatterPlotPoints) {
@@ -780,22 +788,74 @@ function openPanelModal(sourcePanel, document, windowObject, elements, state) {
     document.removeEventListener('keydown', handleEscapeKey);
   };
 
-  // Redraw charts on the cloned canvas elements in the modal
-  // Find and redraw any canvases that were cloned into the modal
-  const durationChartInModal = modalBodyDiv.querySelector('#durationChart');
-  const scatterChartInModal = modalBodyDiv.querySelector('#scatterChart');
-  
+  // Redraw charts on the cloned canvas elements in the modal.
+  // Use querySelectorAll('canvas') + attribute filter to avoid JSDOM's ID-map lookup
+  // returning the original (non-modal) canvas when duplicate IDs exist after cloneNode.
+  const modalCanvases = Array.from(modalBodyDiv.querySelectorAll('canvas'));
+  const durationChartInModal = modalCanvases.find(c => c.id === 'durationChart') || null;
+  const scatterChartInModal = modalCanvases.find(c => c.id === 'scatterChart') || null;
+
   if (durationChartInModal && state && state.analysis) {
     drawDurationHistogram(durationChartInModal, state.filteredEvents.filter(event => event.isQueryEvent), windowObject);
   }
-  
+
   if (scatterChartInModal && state && state.analysis) {
     drawRiskScatter(scatterChartInModal, state.filteredEvents.filter(event => event.isQueryEvent).slice(0, 300), state, windowObject);
+    bindScatterEventsForModal(modalBodyDiv, state, windowObject, elements, modalOverlay);
+
+    // When the modal closes (by any means), restore the main scatter chart's plot points
+    const prevCleanup = modalOverlay._closeCleanup;
+    modalOverlay._closeCleanup = () => {
+      if (prevCleanup) prevCleanup();
+      if (state.analysis) drawCharts(elements, state, windowObject);
+    };
   }
 
   // Trap focus in modal and focus the close button
   focusTrapModal(modalOverlay);
   closeBtn.focus();
+}
+
+function bindScatterEventsForModal(modalBodyDiv, state, windowObject, elements, modalOverlay) {
+  const canvas = modalBodyDiv.querySelector('canvas');
+  const tooltip = modalBodyDiv.querySelector('.chart-tooltip');
+
+  if (!canvas) {
+    return;
+  }
+
+  // Remove duplicate IDs from cloned elements to keep the document valid
+  canvas.removeAttribute('id');
+  if (tooltip) {
+    tooltip.removeAttribute('id');
+  }
+
+  canvas.addEventListener('mousemove', event => {
+    const nearest = findNearestScatterPoint(event, canvas, state.scatterPlotPoints);
+    if (!nearest) {
+      if (tooltip) hideScatterTooltip(tooltip, canvas);
+      return;
+    }
+    canvas.style.cursor = 'pointer';
+    if (tooltip) showScatterTooltip(nearest, event, canvas, tooltip);
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (tooltip) hideScatterTooltip(tooltip, canvas);
+  });
+
+  canvas.addEventListener('click', event => {
+    const nearest = findNearestScatterPoint(event, canvas, state.scatterPlotPoints);
+    if (!nearest) {
+      return;
+    }
+
+    closeModal(modalOverlay);
+    state.selectedId = nearest.event.id;
+    renderTable(elements, state, windowObject);
+    renderDetails(elements, state.analysis, state.selectedId);
+    scrollToSelectedRow(elements, windowObject);
+  });
 }
 
 function closeModal(modalOverlay) {
