@@ -1,0 +1,25 @@
+{
+  "name": "sql-profile-performance-viewer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:a11y": "vitest run tests/accessibility.test.js",
+    "test:security": "npm audit --omit=dev",
+    "test:quality": "npm test && npm run test:a11y && npm run test:security && npm run test:coverage",
+    "test:report": "mkdir -p reports && vitest run --coverage --reporter=default --reporter=json --outputFile=reports/vitest-results.json && cp coverage/coverage-summary.json reports/coverage-summary.json",
+    "test:a11y:report": "mkdir -p reports && vitest run tests/accessibility.test.js --reporter=default --reporter=json --outputFile=reports/a11y-results.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.0",
+    "jest-axe": "^10.0.0",
+    "jsdom": "^29.0.1",
+    "vitest": "^4.1.0"
+  }
+}

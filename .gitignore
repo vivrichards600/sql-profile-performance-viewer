@@ -1,0 +1,15 @@
+# Node
+node_modules/
+
+# Test outputs
+coverage/
+playwright-report/
+reports/
+test-results/
+test-output.txt
+
+# Editor
+.vscode/
+
+# OS
+.DS_Store

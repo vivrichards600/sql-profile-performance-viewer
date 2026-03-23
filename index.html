@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQL Profiler Performance Analyzer</title>
+<link rel="stylesheet" href="./src/viewer.css">
+</head>
+
+<body>
+<div class="shell">
+  <section class="compact-bar" id="compactBar">
+    <div class="compact-bar-left">
+      <span class="compact-chip">SQL Profiler Analyzer</span>
+      <span id="compactSummary">Load a file to start analysis</span>
+    </div>
+    <div class="compact-actions">
+      <button class="compact-btn" id="showIntroBtn" type="button">Show upload</button>
+      <button class="compact-btn" id="loadAnotherBtn" type="button">Load another file</button>
+    </div>
+  </section>
+
+  <div class="hero">
+    <section class="hero-card">
+      <input type="file" id="fileInput" accept=".json" hidden>
+      <div id="dropZone">
+        <div class="eyebrow">Upload</div>
+        <h2>Click or drop a SQL Profiler JSON export</h2>
+        <p class="muted">Large files are supported. Empty rows are ignored automatically.</p>
+        <div class="badges">
+          <span class="badge">Duration</span>
+          <span class="badge">CPU</span>
+          <span class="badge">Reads / Writes</span>
+          <span class="badge">Row count</span>
+          <span class="badge">Hotspot scoring</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="metric-grid">
+    <article class="metric-card">
+      <div class="metric-label tip-wrap">Total Events <span class="tip-icon" tabindex="0" data-tip="All events in the file, including connection and noise events.">i</span></div>
+      <div class="metric-value" id="metricTotalEvents">0</div>
+      <div class="metric-hint" id="metricEventHint">No file loaded</div>
+    </article>
+    <article class="metric-card">
+      <div class="metric-label tip-wrap">Query Events <span class="tip-icon" tabindex="0" data-tip="Events considered actual SQL work (for example rpc_completed, sql_batch_completed).">i</span></div>
+      <div class="metric-value" id="metricQueries">0</div>
+      <div class="metric-hint" id="metricQueriesHint">Profiler work events</div>
+    </article>
+    <article class="metric-card">
+      <div class="metric-label tip-wrap">Total Duration <span class="tip-icon" tabindex="0" data-tip="Sum of query durations. High totals usually indicate user-facing latency risk.">i</span></div>
+      <div class="metric-value" id="metricDuration">0 ms</div>
+      <div class="metric-hint" id="metricDurationHint">Across visible analysis scope</div>
+    </article>
+    <article class="metric-card">
+      <div class="metric-label tip-wrap">Total CPU <span class="tip-icon" tabindex="0" data-tip="Total SQL CPU time across visible query events.">i</span></div>
+      <div class="metric-value" id="metricCpu">0 ms</div>
+      <div class="metric-hint" id="metricCpuHint">Aggregate CPU time</div>
+    </article>
+    <article class="metric-card">
+      <div class="metric-label tip-wrap">Logical Reads <span class="tip-icon" tabindex="0" data-tip="Memory page reads. Very high reads can indicate heavy scans or missing indexes.">i</span></div>
+      <div class="metric-value" id="metricReads">0</div>
+      <div class="metric-hint" id="metricReadsHint">Potential I/O pressure</div>
+    </article>
+    <article class="metric-card">
+      <div class="metric-label tip-wrap">Risk Score <span class="tip-icon" tabindex="0" data-tip="Composite score from duration, CPU, reads, writes, and repetition. Higher score = investigate sooner.">i</span></div>
+      <div class="metric-value" id="metricRisk">0</div>
+      <div class="metric-hint" id="metricRiskHint">Higher means more likely to deserve attention</div>
+    </article>
+  </section>
+
+  <section class="reading-guide">
+    <strong>Quick reading order:</strong> 1) Potential Problems, 2) top rows in Hotspot Table, 3) Selected Event details, 4) Risk Map for clusters.
+  </section>
+
+  <section class="control-bar">
+    <input type="search" id="searchInput" placeholder="Filter by SQL text, app, table, event name, or operation">
+    <label class="toggle"><input type="checkbox" id="hideNoiseToggle" checked> Hide connection noise <span class="tip-icon" tabindex="0" data-tip="Hides login/logout and reset-connection events so query work is easier to review.">i</span></label>
+    <label class="toggle"><input type="checkbox" id="problemsOnlyToggle"> Problems only <span class="tip-icon" tabindex="0" data-tip="Shows rows with stronger warning signals based on scoring thresholds.">i</span></label>
+    <div class="toggle" id="tableCountLabel">Showing 0 rows</div>
+    <div class="toggle" id="eventCountLabel">0 events loaded</div>
+  </section>
+
+  <section class="dashboard">
+    <div class="stack">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Potential Problems</h2>
+            <div class="panel-subtitle">Percentile-based findings from the loaded export.</div>
+          </div>
+        </div>
+        <div class="panel-content">
+          <div class="findings" id="findings"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Hotspot Table</h2>
+            <div class="panel-subtitle">Rows are ranked by severity using duration, reads, writes, CPU, repetition, and noise detection.</div>
+            <div class="panel-note">Tip: click any row to open that query in Selected Event.</div>
+          </div>
+          <div class="badge" id="tableLimitBadge">Render limit: 750</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th><span class="th-tip">Risk <span class="tip-icon" tabindex="0" data-tip="Priority ranking. Focus on highest values first.">i</span></span></th>
+                <th>Event</th>
+                <th>App</th>
+                <th>Op</th>
+                <th>Table</th>
+                <th>Statement</th>
+                <th><span class="th-tip">Duration <span class="tip-icon" tabindex="0" data-tip="Elapsed time for this event.">i</span></span></th>
+                <th><span class="th-tip">CPU <span class="tip-icon" tabindex="0" data-tip="CPU consumed by this event.">i</span></span></th>
+                <th><span class="th-tip">Reads <span class="tip-icon" tabindex="0" data-tip="Logical reads for this event.">i</span></span></th>
+                <th>Writes</th>
+                <th>Rows</th>
+              </tr>
+            </thead>
+            <tbody id="results"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="stack">
+      <section class="panel details-card">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Selected Event</h2>
+            <div class="panel-subtitle">Full SQL and profiler metadata for the currently selected row.</div>
+          </div>
+        </div>
+        <div class="panel-content details-panel-content" id="detailsPanel">
+          <div class="empty">Load a file and click a row to inspect the event details.</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Risk Map</h2>
+            <div class="panel-subtitle">Each point is a query event. Right means more reads, higher means longer duration.</div>
+            <div class="panel-note">Tip: hover a point for context, then click it to open that query.</div>
+          </div>
+        </div>
+        <div class="panel-content canvas-wrap">
+          <div class="chart-legend">
+            <span class="interactive-badge"><span class="interactive-dot"></span> Clickable points</span>
+            <span class="legend-item"><span class="legend-dot legend-low"></span> Lower risk</span>
+            <span class="legend-item"><span class="legend-dot legend-medium"></span> Medium risk</span>
+            <span class="legend-item"><span class="legend-dot legend-high"></span> High risk</span>
+            <span class="legend-item">Dot size = CPU</span>
+          </div>
+          <div class="canvas-stage">
+            <canvas id="scatterChart"></canvas>
+            <div id="scatterTooltip" class="chart-tooltip" aria-hidden="true"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Event Mix</h2>
+            <div class="panel-subtitle">Shows how much of the capture is actual query work versus profiler noise.</div>
+          </div>
+        </div>
+        <div class="panel-content mini-grid">
+          <div>
+            <div class="bars" id="eventBreakdown"></div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="durationChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Top Patterns</h2>
+            <div class="panel-subtitle">Repeated query signatures grouped to expose cumulative cost.</div>
+          </div>
+        </div>
+        <div class="panel-content">
+          <div class="bars" id="patternBreakdown"></div>
+        </div>
+      </section>
+    </div>
+  </section>
+</div>
+
+<script type="module" src="./src/bootstrap.js"></script>
+</body>
+</html>
